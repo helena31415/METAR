@@ -1,0 +1,227 @@
+Galeão - SBGL - 25/10/2024
+########################################################################################################################################
+import pandas as pd
+import re
+
+# Função para converter direção do vento em unidades cardinais intermediárias
+def vento_para_cardinais(direcao_vento):
+    direcoes = {
+        (0, 11.25): 'N', (11.25, 33.75): 'NNE', (33.75, 56.25): 'NE', (56.25, 78.75): 'ENE',
+        (78.75, 101.25): 'E', (101.25, 123.75): 'ESE', (123.75, 146.25): 'SE', (146.25, 168.75): 'SSE',
+        (168.75, 191.25): 'S', (191.25, 213.75): 'SSW', (213.75, 236.25): 'SW', (236.25, 258.75): 'WSW',
+        (258.75, 281.25): 'W', (281.25, 303.75): 'WNW', (303.75, 326.25): 'NW', (326.25, 348.75): 'NNW',
+        (348.75, 360): 'N'
+    }
+    for (min_dir, max_dir), card in direcoes.items():
+        if min_dir <= direcao_vento < max_dir:
+            return card
+    return 'N'  # Padrão caso algo inesperado aconteça
+
+# Função para converter siglas de nuvens em frações de cobertura de céu
+def cobertura_ceu_para_frac(cobertura_ceu):
+    mapping = {
+        'FEW': '1/8 - 2/8',
+        'SCT': '3/8 - 4/8',
+        'BKN': '5/8 - 7/8',
+        'OVC': '8/8'
+    }
+    return mapping.get(cobertura_ceu, 'Desconhecido')
+
+# Função para extrair horário no formato HH:MM
+def extrair_horario(data_hora):
+    match_hora = re.search(r'(\d{4})Z', data_hora)
+    if match_hora:
+        return match_hora.group(1)[:2] + ':' + match_hora.group(1)[2:]
+    return 'Desconhecido'
+
+# Função para decodificar METAR/SPECI
+def decode_metar(mensagem):
+    metar_data = {}
+
+    # Localidade
+    metar_data['localidade'] = mensagem.split()[0]
+
+    # Data e Hora (usando a regex para pegar o padrão de data/hora)
+    match_data_hora = re.search(r'(\d{6}Z)', mensagem)
+    if match_data_hora:
+        metar_data['data_hora'] = match_data_hora.group(1)
+        metar_data['horario'] = extrair_horario(metar_data['data_hora'])
+
+    # Vento (direção e intensidade)
+    match_vento = re.search(r'(\d{3})(\d{2})KT', mensagem)
+    if match_vento:
+        direcao_vento = int(match_vento.group(1))
+        intensidade_vento = int(match_vento.group(2))
+        metar_data['vento_direcao'] = direcao_vento
+        metar_data['vento_intensidade'] = intensidade_vento
+        metar_data['vento_cardinal'] = vento_para_cardinais(direcao_vento)
+        # Convertendo de nós para metros por segundo
+        metar_data['vento_velocidade_m_s'] = round(intensidade_vento * 0.514444, 2)
+
+    # Visibilidade
+    match_visibilidade = re.search(r'(\d{4})', mensagem)
+    if match_visibilidade:
+        metar_data['visibilidade'] = match_visibilidade.group(1)
+
+    # Estado do tempo e nuvens
+    match_nuvens = re.findall(r'(FEW|SCT|BKN|OVC)(\d{3})', mensagem)
+    if match_nuvens:
+        metar_data['nuvens'] = [{'tipo': nuvem[0], 'altura': nuvem[1]} for nuvem in match_nuvens]
+        # Convertendo cobertura do céu para fração
+        cobertura_ceu = ' - '.join([f"{nuvem['tipo']}{nuvem['altura']}" for nuvem in metar_data['nuvens']])
+        metar_data['cobertura_ceu_frac'] = ' - '.join([cobertura_ceu_para_frac(nuvem['tipo']) for nuvem in metar_data['nuvens']])
+
+    # Temperatura e ponto de orvalho
+    match_temp = re.search(r'(\d{2})/(\d{2})', mensagem)
+    if match_temp:
+        metar_data['temperatura'] = match_temp.group(1)
+        metar_data['ponto_orvalho'] = match_temp.group(2)
+
+    # Pressão
+    match_pressao = re.search(r'Q(\d{4})', mensagem)
+    if match_pressao:
+        metar_data['pressao'] = match_pressao.group(1)
+
+    return metar_data
+
+# Função para decodificar o conjunto de dados
+def decode_metar_df(df):
+    decoded_data = []
+    for _, row in df.iterrows():
+        decoded = decode_metar(row['Mensagem'])
+        decoded_data.append(decoded)
+    return pd.DataFrame(decoded_data)
+
+# Dados corrigidos para garantir que as listas tenham o mesmo comprimento
+data = {
+    'Localidade': ['SBGL'] * 17,
+    'Tipo': ['METAR', 'METAR', 'METAR', 'METAR', 'METAR', 'METAR', 'METAR', 'METAR', 'METAR', 'METAR', 'SPECI', 'SPECI', 'METAR', 'METAR', 'METAR', 'METAR', 'METAR'],
+    'Data': ['25/10/2024'] * 17,
+    'Mensagem': [
+        'METAR SBGL 250700Z 30012KT 9999 FEW010 BKN100 27/20 Q1004=',
+        'METAR SBGL 250800Z 30007KT 9999 FEW010 BKN100 27/20 Q1004=',
+        'METAR SBGL 250900Z 27006KT 9999 FEW008 BKN100 27/20 Q1005=',
+        'METAR SBGL 251000Z 23008KT 9999 FEW008 SCT050 BKN100 28/20 Q1007=',
+        'METAR SBGL 251100Z 24013KT CAVOK 30/20 Q1008=',
+        'METAR SBGL 251200Z 26008KT CAVOK 30/20 Q1008=',
+        'METAR SBGL 251300Z 35010KT CAVOK 32/22 Q1006=',
+        'METAR SBGL 251400Z 33017KT 9999 FEW025 SCT045 32/20 Q1005=',
+        'METAR SBGL 251500Z 32017KT 9999 FEW025 33/19 Q1004=',
+        'METAR SBGL 251600Z 30016KT CAVOK 34/20 Q1004=',
+        'SPECI SBGL 251625Z 27020G32KT 9999 FEW020 34/19 Q1004=',
+        'SPECI COR SBGL 251625Z 27020G32KT 9999 FEW020 BKN100 34/19 Q1004=',
+        'METAR SBGL 251700Z 29018KT 9999 FEW020 BKN100 33/19 Q1005=',
+        'METAR SBGL 251800Z 9999 FEW020 BKN100 33/19 Q1005=',
+        'METAR SBGL 251900Z 30010KT 9999 FEW030 BKN100 30/18 Q1004=',
+        'METAR SBGL 252000Z 32012KT 9999 FEW030 BKN100 30/18 Q1004=',
+        'METAR SBGL 252100Z 34015KT 9999 FEW040 BKN100 29/18 Q1004='
+    ]
+}
+
+df = pd.DataFrame(data)
+
+# Decodificando as mensagens METAR/SPECI
+decoded_df = decode_metar_df(df)
+
+# Exibindo os dados decodificados
+decoded_df
+######################################################################################################################################################################################################
+
+Santos Dumont - SBRJ - 25/10/2024
+###############################################################################################
+import pandas as pd
+import re
+
+# Dados das mensagens METAR/SPECI
+data = {
+    "Localidade": ["SBRJ"] * 13,
+    "Tipo": ["METAR"] * 11 + ["SPECI"] + ["METAR"],
+    "Data": ["25/10/2024"] * 13,
+    "Mensagem": [
+        "METAR SBRJ 250700Z 29011KT 9999 FEW010 SCT020 BKN100 28/20 Q1003=",
+        "METAR SBRJ 250800Z 30008KT 9999 FEW010 SCT020 BKN100 28/20 Q1003=",
+        "METAR SBRJ 250900Z 35007KT 9999 FEW010 BKN100 25/22 Q1004=",
+        "METAR SBRJ 251000Z 29010KT 9999 FEW010 SCT050 BKN100 29/20 Q1007=",
+        "METAR SBRJ 251100Z 22006KT 180V260 9999 FEW015 SCT050 BKN100 29/21 Q1008=",
+        "METAR SBRJ 251200Z 29007KT 260V350 9999 FEW020 SCT050 BKN100 30/20 Q1007=",
+        "METAR SBRJ 251300Z 33011KT 300V010 9999 FEW040 BKN100 30/21 Q1006=",
+        "METAR SBRJ 251400Z 32018KT 9999 SCT040 BKN100 32/20 Q1004 WS R02=",
+        "METAR SBRJ 251500Z 32017KT 9999 SCT030 BKN100 32/20 Q1003 WS R02=",
+        "METAR SBRJ 251600Z 31014KT 9999 FEW030 BKN100 33/21 Q1004=",
+        "SPECI SBRJ 251632Z 30016G28KT 260V320 9999 FEW030 BKN100 34/20 Q1004=",
+        "METAR SBRJ 251700Z 29013KT 260V320 9999 FEW035 BKN100 34/20 Q1004=",
+        "METAR SBRJ 251800Z 31012KT 9999 FEW035 BKN100 33/19 Q1004="
+    ]
+}
+
+# Função para decodificar cada mensagem
+def decode_metar(metar):
+    decoded = {}
+    # Extrai horário
+    time_match = re.search(r'(\d{4})Z', metar)
+    decoded['Hora'] = time_match.group(1) if time_match else None
+    
+    # Extrai vento (direção e velocidade)
+    wind_match = re.search(r'(\d{3})(\d{2})KT', metar)
+    if wind_match:
+        decoded['Direção_Vento'] = int(wind_match.group(1))
+        decoded['Velocidade_Vento'] = int(wind_match.group(2))
+    else:
+        decoded['Direção_Vento'] = decoded['Velocidade_Vento'] = None
+
+    # Extrai rajadas de vento, se houver
+    gust_match = re.search(r'G(\d{2})KT', metar)
+    decoded['Rajada'] = int(gust_match.group(1)) if gust_match else None
+    
+    # Extrai variação do vento (direção variável)
+    var_wind_match = re.search(r'(\d{3})V(\d{3})', metar)
+    if var_wind_match:
+        decoded['Direção_Vento_Min'] = int(var_wind_match.group(1))
+        decoded['Direção_Vento_Max'] = int(var_wind_match.group(2))
+    else:
+        decoded['Direção_Vento_Min'] = decoded['Direção_Vento_Max'] = None
+
+    # Extrai visibilidade
+    visibility_match = re.search(r'(\d{4})', metar)
+    decoded['Visibilidade'] = int(visibility_match.group(1)) if visibility_match else None
+    
+    # Extrai cobertura de nuvens
+    cloud_coverage = re.findall(r'(FEW|SCT|BKN|OVC)(\d{3})', metar)
+    decoded['Cobertura_Nuvens'] = [{'Tipo': cc[0], 'Altura': int(cc[1]) * 100} for cc in cloud_coverage]
+    
+    # Extrai temperatura e ponto de orvalho
+    temp_match = re.search(r'(\d{2})/(\d{2})', metar)
+    if temp_match:
+        decoded['Temperatura'] = int(temp_match.group(1))
+        decoded['Ponto_Orvalho'] = int(temp_match.group(2))
+    else:
+        decoded['Temperatura'] = decoded['Ponto_Orvalho'] = None
+
+    # Extrai pressão atmosférica
+    pressure_match = re.search(r'Q(\d{4})', metar)
+    decoded['Pressão'] = int(pressure_match.group(1)) if pressure_match else None
+
+    return decoded
+
+# Decodifica cada mensagem e armazena em um DataFrame
+df = pd.DataFrame(data)
+df['Decodificado'] = df['Mensagem'].apply(decode_metar)
+
+# Função para calcular a fração de cobertura de nuvens como uma string
+def calcular_fração_nuvem(cobertura):
+    if cobertura == 'FEW':
+        return '1/8 - 2/8'  # Intervalo de cobertura para FEW
+    elif cobertura == 'SCT':
+        return '3/8 - 4/8'  # Intervalo de cobertura para SCT
+    elif cobertura == 'BKN':
+        return '5/8 - 7/8'  # Intervalo de cobertura para BKN
+    elif cobertura == 'OVC':
+        return '8/8'  # Totalmente coberto para OVC
+
+# Adiciona a fração de cobertura do céu
+df_decoded = pd.concat([df.drop(columns=['Decodificado']), pd.json_normalize(df['Decodificado'])], axis=1)
+df_decoded['Fração_Cobertura_Céu'] = df_decoded['Cobertura_Nuvens'].apply(lambda x: calcular_fração_nuvem(x[0]['Tipo']) if isinstance(x, list) else None)
+
+# Exibe o DataFrame atualizado
+df_decoded
+
